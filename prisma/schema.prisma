@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Настройки подключения к Tuya Cloud (единственная строка, id = 1)
+model Settings {
+  id           Int       @id @default(1)
+  clientId     String?
+  clientSecret String?
+  deviceId     String?
+  region       String?
+  deviceName   String?
+  deviceModel  String?
+  deviceOnline Boolean?
+  lastSyncAt   DateTime?
+  updatedAt    DateTime  @updatedAt
+}
+
+// История показаний датчика
+model Reading {
+  id          Int      @id @default(autoincrement())
+  recordedAt  DateTime
+  temperature Float?
+  humidity    Float?
+  battery     Int?
+  source      String   @default("manual")
+
+  @@index([recordedAt])
+}
