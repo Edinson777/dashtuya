@@ -1,0 +1,66 @@
+name: Сбор показаний Tuya и публикация на GitHub Pages
+
+# Сбор данных из Tuya Cloud и деплой статичного дашборда на Pages.
+# Ключи берутся из Secrets/Variables репозитория и в код не попадают.
+on:
+  schedule:
+    - cron: '*/20 * * * *' # каждые 20 минут (GitHub может сдвигать запуск на несколько минут)
+  workflow_dispatch: # ручной запуск из вкладки Actions
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# одновременно живёт только одна публикация: новый запуск отменяет незавершённый
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Собрать показания из Tuya Cloud
+        env:
+          TUYA_CLIENT_ID: ${{ secrets.TUYA_CLIENT_ID }}
+          TUYA_CLIENT_SECRET: ${{ secrets.TUYA_CLIENT_SECRET }}
+          TUYA_DEVICE_ID: ${{ secrets.TUYA_DEVICE_ID }}
+          TUYA_REGION: ${{ vars.TUYA_REGION }}
+        run: node scripts/collect-pages-data.mjs
+
+      - name: Собрать статичный сайт
+        run: |
+          mkdir -p dist/data
+          cp -r site/* dist/
+          cp data/latest.json dist/data/latest.json
+          ls -la dist dist/data
+
+      - name: Настроить Pages
+        uses: actions/configure-pages@v5
+
+      - name: Загрузить артефакт
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Опубликовать на GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

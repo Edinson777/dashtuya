@@ -56,6 +56,29 @@ bun run dev
    - Китай — `openapi.tuya.cn`
    - Индия — `openapi.tuyain.com`
 
+## Варианты размещения
+
+### Локально / на своём сервере (полная функциональность)
+
+Как описано в «Быстром старте»: живой опрос Tuya, кнопка «Обновить», настройки на странице, история в SQLite.
+
+### GitHub Pages (без сервера, витрина показаний)
+
+Статичная версия дашборда из папки [`site/`](site/) публикуется на GitHub Pages, а данные собирает GitHub Actions по расписанию (каждые ~20 минут) — воркфлоу [`.github/workflows/pages.yml`](.github/workflows/pages.yml) опрашивает Tuya Cloud и публикует `data/latest.json` вместе с сайтом.
+
+Одна настройка в репозитории:
+
+1. **Settings → Pages → Build and deployment → Source: GitHub Actions**
+2. **Settings → Secrets and variables → Actions** — добавьте секреты:
+   - `TUYA_CLIENT_ID` — Access ID проекта
+   - `TUYA_CLIENT_SECRET` — Access Secret проекта
+   - `TUYA_DEVICE_ID` — ID датчика
+3. На вкладке **Variables** того же раздела — переменную `TUYA_REGION` со значением `us`, `eu`, `euw`, `cn` или `in`.
+
+После этого запуск воркфлоу вручную (Actions → воркфлоу → Run workflow) или по расписанию обновит страницу: `https://<ваш-логин>.github.io/<репозиторий>/`.
+
+Ключи хранятся только в зашифрованных Secrets и не попадают ни в код, ни в логи сборки. Для проверки вёрстки без устройства скрипт поддерживает тестовые данные: `node scripts/collect-pages-data.mjs --mock`.
+
 ## Структура проекта
 
 ```
@@ -72,8 +95,12 @@ src/
 │   └── state.ts                  # сборка состояния страницы, маскирование секретов
 └── components/ui/                # shadcn/ui компоненты
 
-prisma/schema.prisma              # модели Settings (ключи) и Reading (показания)
+site/                             # статичная версия для GitHub Pages (HTML/CSS/JS + Chart.js)
+scripts/collect-pages-data.mjs    # сборщик данных для Actions: Tuya → data/latest.json
 scripts/seed-test.mjs             # тестовые данные для локальной проверки без устройства
+.github/workflows/pages.yml       # воркфлоу: сбор по расписанию + деплой на Pages
+
+prisma/schema.prisma              # модели Settings (ключи) и Reading (показания)
 ```
 
 ## Распознаваемые коды датчиков

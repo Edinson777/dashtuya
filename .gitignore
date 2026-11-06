@@ -63,3 +63,7 @@ server.log
 
 # runtime-артефакты
 *.pid
+
+# сгенерированные артефакты Pages-версии
+/data/
+/dist/

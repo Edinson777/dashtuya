@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Монитор климата — датчик Tuya</title>
+  <meta name="description" content="Показания датчика температуры и влажности Tuya: текущие значения, график за 24 часа, батарея и статус устройства." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2322d3ee' stroke-width='2'%3E%3Cpath d='M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div class="glow" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>
+        </div>
+        <div>
+          <h1>Монитор климата</h1>
+          <p>Датчик Tuya · температура и влажность</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span class="sync-label" id="sync-label">—</span>
+        <button id="refresh-btn" class="btn" aria-label="Обновить данные">
+          <svg id="refresh-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+          Обновить
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="error-banner" class="error-banner" hidden>
+      <strong>Ошибка сбора данных</strong>
+      <p id="error-text"></p>
+    </div>
+
+    <section class="cards">
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title"><span class="icon amber" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg></span>Температура</h2>
+          <span class="trend" id="temp-trend"></span>
+        </div>
+        <div class="value-row"><span class="big-value" id="temp-value">—</span><span class="unit amber">°C</span></div>
+        <p class="hint" id="temp-stats">История за сутки появится после синхронизации</p>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title"><span class="icon cyan" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7s6.5 6.6 6.5 11a6.5 6.5 0 0 1-13 0c0-4.4 6.5-11 6.5-11Z"/></svg></span>Влажность</h2>
+          <span class="badge" id="hum-badge" hidden></span>
+        </div>
+        <div class="value-row"><span class="big-value" id="hum-value">—</span><span class="unit cyan">%</span></div>
+        <div class="range-track" aria-hidden="true">
+          <div class="range-zone"></div>
+          <div class="range-marker" id="hum-marker" hidden></div>
+        </div>
+        <div class="range-labels"><span>0%</span><span>зона 30–60%</span><span>100%</span></div>
+        <p class="hint" id="hum-stats"></p>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title"><span class="icon green" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></span>Устройство</h2>
+        </div>
+        <div class="device-row">
+          <span class="device-name" id="device-name">—</span>
+          <span class="badge online" id="device-online" hidden></span>
+        </div>
+        <p class="hint" id="device-model"></p>
+        <p class="mono" id="device-id">—</p>
+        <div class="battery">
+          <div class="battery-label">
+            <span>Батарея</span>
+            <span id="battery-value">не сообщается</span>
+          </div>
+          <div class="battery-track"><div class="battery-fill" id="battery-fill"></div></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="card chart-card">
+      <div class="chart-head">
+        <div>
+          <h2 class="chart-title">История за 24 часа</h2>
+          <p class="chart-sub">Данные собирает GitHub Actions по расписанию</p>
+        </div>
+        <div class="legend">
+          <span><i class="dot amber"></i>Температура, °C</span>
+          <span><i class="dot cyan"></i>Влажность, %</span>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart" role="img" aria-label="График температуры и влажности за 24 часа"></canvas>
+      </div>
+      <p class="empty" id="chart-empty" hidden>
+        Истории пока нет. Убедитесь, что секреты Tuya заданы в настройках Actions и воркфлоу отработал успешно.
+      </p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>Ключи Tuya хранятся в зашифрованных Secrets репозитория и не публикуются</span>
+      <span><a href="https://github.com/Edinson777/dashtuya" target="_blank" rel="noreferrer">Репозиторий</a> · GitHub Pages + Actions</span>
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
