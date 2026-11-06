@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 /**
- * Сборщик показаний датчика Tuya для GitHub Pages.
+ * Сборщик показаний датчиков Tuya для GitHub Pages.
  *
  * Используется в GitHub Actions (см. .github/workflows/pages.yml):
  *   node scripts/collect-pages-data.mjs          — реальные данные (ключи из env)
  *   node scripts/collect-pages-data.mjs --mock   — тестовые данные без устройства
  *
  * Переменные окружения (реальный режим):
- *   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_DEVICE_ID, TUYA_REGION (us|eu|euw|cn|in)
+ *   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION (us|eu|euw|cn|in)
+ *   TUYA_DEVICE_ID — список ID через запятую («id1,id2»)
+ *                    или один ID: тогда скрипт пробует автообнаружить все датчики
+ *                    аккаунта (Smart Home Management API) и при неудаче
+ *                    возвращается к указанному устройству.
  *
- * Результат: data/latest.json — его читает статичный дашборд (site/).
+ * Результат: data/latest.json с массивом sensors[] — его читает дашборд (site/).
  * Сценарий не имеет зависимостей и работает на Node.js 20+ (глобальный fetch).
  */
 
 import { createHmac } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,6 +37,8 @@ const REGION_HOSTS = {
 const TEMP_CODES = new Set(['va_temperature', 'temp_current', 'temperature', 'current_temperature', 'temp_indoor']);
 const HUM_CODES = new Set(['va_humidity', 'humidity_current', 'humidity', 'current_humidity', 'humidity_value']);
 const BATT_CODES = new Set(['battery_percentage', 'battery', 'battery_value', 'va_battery', 'battery_state']);
+
+const CLIMATE_CODES = new Set([...TEMP_CODES, ...HUM_CODES]); // признак датчика климата
 
 /* ------------------------------ подпись запросов ------------------------------ */
 
@@ -112,7 +118,7 @@ function extractReading(status) {
 
 /* ------------------------------ история из журнала ------------------------------ */
 
-async function fetchHistory(creds, token, hours = 24) {
+async function fetchHistory(creds, token, deviceId, hours = 24) {
   const end = Date.now();
   const start = end - hours * 3_600_000;
   const params = new URLSearchParams({
@@ -124,7 +130,7 @@ async function fetchHistory(creds, token, hours = 24) {
   const buckets = new Map();
 
   for (let page = 0; page < 30; page += 1) {
-    const result = await apiGet(creds, token, `/v1.0/iot-03/devices/${creds.deviceId}/logs?${params}`);
+    const result = await apiGet(creds, token, `/v1.0/iot-03/devices/${deviceId}/logs?${params}`);
     for (const log of result?.logs ?? []) {
       const code = typeof log.code === 'string' ? log.code : null;
       if (!code) continue;
@@ -148,7 +154,7 @@ async function fetchHistory(creds, token, hours = 24) {
     .sort((a, b) => new Date(a.t) - new Date(b.t));
 }
 
-/* ------------------------------ утилиты ------------------------------ */
+/* ------------------------------ агрегаты ------------------------------ */
 
 function downsample(items, max) {
   if (items.length <= max) return items;
@@ -175,7 +181,7 @@ function buildStats(history) {
 
 /* ------------------------------ mock-режим ------------------------------ */
 
-function buildMockData() {
+function mockSensor(name, id, baseTemp, baseHum, phaseShift) {
   const now = Date.now();
   const history = [];
   for (let i = 96; i >= 0; i -= 1) {
@@ -183,20 +189,185 @@ function buildMockData() {
     const phase = (i / 96) * Math.PI * 2;
     history.push({
       t: new Date(t).toISOString(),
-      temp: Math.round((22.4 + Math.sin(phase - 1.2) * 1.6 + (Math.random() - 0.5) * 0.3) * 10) / 10,
-      hum: Math.round((46 + Math.sin(phase + 0.8) * 6 + (Math.random() - 0.5) * 1.5) * 10) / 10,
+      temp: Math.round((baseTemp + Math.sin(phase - 1.2 + phaseShift) * 1.6 + (Math.random() - 0.5) * 0.3) * 10) / 10,
+      hum: Math.round((baseHum + Math.sin(phase + 0.8 + phaseShift) * 6 + (Math.random() - 0.5) * 1.5) * 10) / 10,
     });
   }
   const last = history[history.length - 1];
   return {
+    id,
     status: 'ok',
-    generatedAt: new Date(now).toISOString(),
     error: null,
-    mock: true,
-    device: { name: 'Тестовый датчик климата', model: 'TS0201', online: true },
+    device: { name, model: 'TS0201', online: true },
     current: { temperature: last.temp, humidity: last.hum, battery: 87, recordedAt: last.t },
     stats: buildStats(history),
     history: downsample(history, 400),
+  };
+}
+
+function buildMockData() {
+  const now = new Date();
+  return {
+    status: 'ok',
+    generatedAt: now.toISOString(),
+    error: null,
+    mock: true,
+    sensors: [
+      mockSensor('Гостиная', 'mock-livingroom', 22.4, 46, 0),
+      mockSensor('Спальня', 'mock-bedroom', 19.8, 55, 1.1),
+      mockSensor('Балкон', 'mock-balcony', 12.6, 71, 2.3),
+    ],
+  };
+}
+
+/* ------------------------------ список датчиков ------------------------------ */
+
+function parseDeviceList(raw) {
+  const list = String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return [...new Set(list)];
+}
+
+/**
+ * Автообнаружение: берём uid из карточки устройства-якоря и получаем
+ * все устройства аккаунта (Smart Home Management API), оставляя датчики климата.
+ * Возвращает массив карточек устройств как из /v1.0/devices — либо null, если
+ * автообнаружение недоступно (нет подписки на API, нет uid и т.п.).
+ */
+async function discoverSensors(creds, token, anchorId) {
+  try {
+    const anchor = await apiGet(creds, token, `/v1.0/devices/${anchorId}`);
+    const uid = anchor?.uid;
+    if (!uid) {
+      console.warn('Автообнаружение недоступно: у устройства нет uid — беру явный список');
+      return null;
+    }
+    const devices = await apiGet(creds, token, `/v1.0/users/${uid}/devices`);
+    if (!Array.isArray(devices)) {
+      console.warn('Автообнаружение недоступно: неожиданный ответ API — беру явный список');
+      return null;
+    }
+    const sensors = devices.filter((d) =>
+      Array.isArray(d?.status) && d.status.some((item) => CLIMATE_CODES.has(item.code)),
+    );
+    // якорь должен попасть в список, даже если фильтр его пропустил
+    if (!sensors.some((d) => d?.id === anchorId) && anchor?.id) sensors.push(anchor);
+    console.log(`Автообнаружение: найдено датчиков климата — ${sensors.length}`);
+    return sensors;
+  } catch (err) {
+    console.warn(`Автообнаружение не удалось (${err.message}) — беру явный список`);
+    return null;
+  }
+}
+
+/* ------------------------------ сбор одного датчика ------------------------------ */
+
+function sectionFromDetail(creds, token, detail, now) {
+  const status = Array.isArray(detail?.status) ? detail.status : [];
+  const reading = extractReading(status);
+  return {
+    id: detail?.id ?? null,
+    status: 'ok',
+    error: null,
+    device: {
+      name: detail?.name ?? null,
+      model: detail?.model ?? null,
+      online: Boolean(detail?.online),
+    },
+    current: { ...reading, recordedAt: now.toISOString() },
+    stats: null,
+    history: [],
+  };
+}
+
+async function collectSection(creds, token, detail, now) {
+  const section = sectionFromDetail(creds, token, detail, now);
+  try {
+    section.history = await fetchHistory(creds, token, detail.id, 24);
+  } catch (err) {
+    console.warn(`Журнал «${detail?.name ?? detail?.id}» недоступен (${err.message}) — график будет пустым`);
+  }
+  section.stats = buildStats(section.history);
+  section.history = downsample(section.history, 400);
+  return section;
+}
+
+async function collectReal() {
+  const clientId = (process.env.TUYA_CLIENT_ID || '').trim();
+  const clientSecret = (process.env.TUYA_CLIENT_SECRET || '').trim();
+  const region = (process.env.TUYA_REGION || 'eu').trim();
+  const ids = parseDeviceList(process.env.TUYA_DEVICE_ID);
+
+  const missing = [
+    !clientId && 'TUYA_CLIENT_ID',
+    !clientSecret && 'TUYA_CLIENT_SECRET',
+    ids.length === 0 && 'TUYA_DEVICE_ID',
+  ].filter(Boolean);
+  if (missing.length) throw new Error(`Не заданы секреты GitHub: ${missing.join(', ')}`);
+  if (!REGION_HOSTS[region]) throw new Error(`Неизвестный регион TUYA_REGION="${region}"`);
+
+  const creds = { clientId, clientSecret, deviceId: ids[0], region };
+  const token = await fetchToken(creds);
+  const now = new Date();
+
+  // определяем список датчиков: один id — автообнаружение, несколько — явный список
+  let details = null;
+  if (ids.length === 1) {
+    details = await discoverSensors(creds, token, ids[0]);
+  }
+  if (!details) {
+    details = [];
+    for (const id of ids) {
+      try {
+        details.push(await apiGet(creds, token, `/v1.0/devices/${id}`));
+      } catch (err) {
+        details.push({ id, name: null, model: null, online: false, status: [], __error: err.message });
+      }
+    }
+  }
+
+  // собираем секции последовательно, ошибки одного датчика не мешают остальным
+  const sensors = [];
+  const errors = [];
+  for (const detail of details) {
+    if (detail?.__error) {
+      errors.push(`${detail.name ?? detail.id}: ${detail.__error}`);
+      sensors.push({
+        id: detail.id,
+        status: 'error',
+        error: detail.__error,
+        device: { name: detail.name ?? null, model: null, online: false },
+        current: null,
+        stats: null,
+        history: [],
+      });
+      continue;
+    }
+    try {
+      sensors.push(await collectSection(creds, token, detail, now));
+    } catch (err) {
+      errors.push(`${detail?.name ?? detail?.id}: ${err.message}`);
+      sensors.push({
+        id: detail?.id ?? null,
+        status: 'error',
+        error: err.message,
+        device: { name: detail?.name ?? null, model: detail?.model ?? null, online: false },
+        current: null,
+        stats: null,
+        history: [],
+      });
+    }
+  }
+
+  const okCount = sensors.filter((s) => s.status === 'ok').length;
+  return {
+    status: okCount === 0 ? 'error' : okCount === sensors.length ? 'ok' : 'partial',
+    generatedAt: now.toISOString(),
+    error: okCount === 0 ? errors[0] ?? 'Не удалось получить данные ни от одного датчика' : null,
+    mock: false,
+    sensors,
   };
 }
 
@@ -208,56 +379,7 @@ function writeResult(data) {
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, 'latest.json');
   writeFileSync(outFile, JSON.stringify(data, null, 2));
-  console.log(`OK: ${outFile}`);
-}
-
-async function collectReal() {
-  const clientId = (process.env.TUYA_CLIENT_ID || '').trim();
-  const clientSecret = (process.env.TUYA_CLIENT_SECRET || '').trim();
-  const deviceId = (process.env.TUYA_DEVICE_ID || '').trim();
-  const region = (process.env.TUYA_REGION || 'eu').trim();
-
-  const missing = [
-    !clientId && 'TUYA_CLIENT_ID',
-    !clientSecret && 'TUYA_CLIENT_SECRET',
-    !deviceId && 'TUYA_DEVICE_ID',
-  ].filter(Boolean);
-  if (missing.length) throw new Error(`Не заданы секреты GitHub: ${missing.join(', ')}`);
-  if (!REGION_HOSTS[region]) throw new Error(`Неизвестный регион TUYA_REGION="${region}"`);
-
-  const creds = { clientId, clientSecret, deviceId, region };
-  const token = await fetchToken(creds);
-  const detail = await apiGet(creds, token, `/v1.0/devices/${deviceId}`);
-
-  let status = Array.isArray(detail?.status) ? detail.status : null;
-  if (!status) {
-    const st = await apiGet(creds, token, `/v1.0/devices/${deviceId}/status`);
-    status = Array.isArray(st) ? st : (st?.list ?? []);
-  }
-
-  const reading = extractReading(status);
-  let history = [];
-  try {
-    history = await fetchHistory(creds, token, 24);
-  } catch (err) {
-    console.warn(`Журнал Tuya недоступен (${err.message}) — график будет пустым`);
-  }
-
-  const now = new Date();
-  return {
-    status: 'ok',
-    generatedAt: now.toISOString(),
-    error: null,
-    mock: false,
-    device: {
-      name: detail?.name ?? null,
-      model: detail?.model ?? null,
-      online: Boolean(detail?.online),
-    },
-    current: { ...reading, recordedAt: now.toISOString() },
-    stats: buildStats(history),
-    history: downsample(history, 400),
-  };
+  console.log(`OK: ${outFile} (датчиков: ${(data.sensors ?? []).length}, статус: ${data.status})`);
 }
 
 async function main() {
@@ -276,12 +398,9 @@ async function main() {
       generatedAt: new Date().toISOString(),
       error: err.message,
       mock: false,
-      device: null,
-      current: null,
-      stats: null,
-      history: [],
+      sensors: [],
     });
-    if (existsSync(join(process.cwd(), 'data', 'latest.json'))) process.exitCode = 0;
+    process.exitCode = 0;
   }
 }
 

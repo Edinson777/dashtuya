@@ -67,3 +67,8 @@ server.log
 # сгенерированные артефакты Pages-версии
 /data/
 /dist/
+
+# локальные тестовые утилиты (жёстко заданные пути песочницы)
+/scripts/serve-site-test.cjs
+/scripts/serve-vercel-test.cjs
+/scripts/test-vercel-readings.cjs

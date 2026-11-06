@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Монитор климата — датчик Tuya</title>
-  <meta name="description" content="Показания датчика температуры и влажности Tuya: текущие значения, график за 24 часа, батарея и статус устройства." />
+  <title>Монитор климата — датчики Tuya</title>
+  <meta name="description" content="Показания датчиков температуры и влажности Tuya: текущие значения, график за 24 часа, батарея и статус устройств." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
@@ -22,7 +22,7 @@
         </div>
         <div>
           <h1>Монитор климата</h1>
-          <p>Датчик Tuya · температура и влажность</p>
+          <p>Датчики Tuya · температура и влажность</p>
         </div>
       </div>
       <div class="header-actions">
@@ -41,68 +41,9 @@
       <p id="error-text"></p>
     </div>
 
-    <section class="cards">
-      <article class="card">
-        <div class="card-head">
-          <h2 class="card-title"><span class="icon amber" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg></span>Температура</h2>
-          <span class="trend" id="temp-trend"></span>
-        </div>
-        <div class="value-row"><span class="big-value" id="temp-value">—</span><span class="unit amber">°C</span></div>
-        <p class="hint" id="temp-stats">История за сутки появится после синхронизации</p>
-      </article>
+    <nav class="sensor-nav" id="sensor-nav" hidden aria-label="Список датчиков"></nav>
 
-      <article class="card">
-        <div class="card-head">
-          <h2 class="card-title"><span class="icon cyan" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7s6.5 6.6 6.5 11a6.5 6.5 0 0 1-13 0c0-4.4 6.5-11 6.5-11Z"/></svg></span>Влажность</h2>
-          <span class="badge" id="hum-badge" hidden></span>
-        </div>
-        <div class="value-row"><span class="big-value" id="hum-value">—</span><span class="unit cyan">%</span></div>
-        <div class="range-track" aria-hidden="true">
-          <div class="range-zone"></div>
-          <div class="range-marker" id="hum-marker" hidden></div>
-        </div>
-        <div class="range-labels"><span>0%</span><span>зона 30–60%</span><span>100%</span></div>
-        <p class="hint" id="hum-stats"></p>
-      </article>
-
-      <article class="card">
-        <div class="card-head">
-          <h2 class="card-title"><span class="icon green" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></span>Устройство</h2>
-        </div>
-        <div class="device-row">
-          <span class="device-name" id="device-name">—</span>
-          <span class="badge online" id="device-online" hidden></span>
-        </div>
-        <p class="hint" id="device-model"></p>
-        <p class="mono" id="device-id">—</p>
-        <div class="battery">
-          <div class="battery-label">
-            <span>Батарея</span>
-            <span id="battery-value">не сообщается</span>
-          </div>
-          <div class="battery-track"><div class="battery-fill" id="battery-fill"></div></div>
-        </div>
-      </article>
-    </section>
-
-    <section class="card chart-card">
-      <div class="chart-head">
-        <div>
-          <h2 class="chart-title">История за 24 часа</h2>
-          <p class="chart-sub">Данные запрашиваются из Tuya Cloud в момент открытия страницы</p>
-        </div>
-        <div class="legend">
-          <span><i class="dot amber"></i>Температура, °C</span>
-          <span><i class="dot cyan"></i>Влажность, %</span>
-        </div>
-      </div>
-      <div class="chart-wrap">
-        <canvas id="chart" role="img" aria-label="График температуры и влажности за 24 часа"></canvas>
-      </div>
-      <p class="empty" id="chart-empty" hidden>
-        Истории пока нет. Проверьте переменные окружения Tuya в настройках проекта Vercel и обновите страницу.
-      </p>
-    </section>
+    <div id="sensors-root"></div>
   </main>
 
   <footer class="site-footer">
@@ -111,6 +52,84 @@
       <span><a href="https://github.com/Edinson777/dashtuya" target="_blank" rel="noreferrer">Репозиторий</a> · Vercel + Tuya Cloud API</span>
     </div>
   </footer>
+
+  <!-- Шаблон секции одного датчика: клонируется для каждого датчика из latest.json -->
+  <template id="sensor-template">
+    <section class="sensor-section">
+      <div class="sensor-head">
+        <h2 class="sensor-title">
+          <span class="icon green" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></span>
+          <span data-el="name">Датчик</span>
+        </h2>
+        <span class="badge" data-el="online" hidden></span>
+      </div>
+
+      <div class="error-inline" data-el="error" hidden>
+        <strong>Датчик недоступен</strong>
+        <p data-el="error-text"></p>
+      </div>
+
+      <div class="sensor-body" data-el="body">
+        <div class="cards">
+          <article class="card">
+            <div class="card-head">
+              <h3 class="card-title"><span class="icon amber" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg></span>Температура</h3>
+              <span class="trend" data-el="temp-trend"></span>
+            </div>
+            <div class="value-row"><span class="big-value" data-el="temp-value">—</span><span class="unit amber">°C</span></div>
+            <p class="hint" data-el="temp-stats">История за сутки появится после синхронизации</p>
+          </article>
+
+          <article class="card">
+            <div class="card-head">
+              <h3 class="card-title"><span class="icon cyan" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7s6.5 6.6 6.5 11a6.5 6.5 0 0 1-13 0c0-4.4 6.5-11 6.5-11Z"/></svg></span>Влажность</h3>
+              <span class="badge" data-el="hum-badge" hidden></span>
+            </div>
+            <div class="value-row"><span class="big-value" data-el="hum-value">—</span><span class="unit cyan">%</span></div>
+            <div class="range-track" aria-hidden="true">
+              <div class="range-zone"></div>
+              <div class="range-marker" data-el="hum-marker" hidden></div>
+            </div>
+            <div class="range-labels"><span>0%</span><span>зона 30–60%</span><span>100%</span></div>
+            <p class="hint" data-el="hum-stats"></p>
+          </article>
+
+          <article class="card">
+            <div class="card-head">
+              <h3 class="card-title"><span class="icon green" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></span>Устройство</h3>
+            </div>
+            <p class="device-model" data-el="device-model"></p>
+            <div class="battery">
+              <div class="battery-label">
+                <span>Батарея</span>
+                <span data-el="battery-value">не сообщается</span>
+              </div>
+              <div class="battery-track"><div class="battery-fill" data-el="battery-fill"></div></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="card chart-card">
+          <div class="chart-head">
+            <div>
+              <h3 class="chart-title">История за 24 часа</h3>
+              <p class="chart-sub">Данные запрашиваются из Tuya Cloud в момент открытия страницы</p>
+            </div>
+            <div class="legend">
+              <span><i class="dot amber"></i>Температура, °C</span>
+              <span><i class="dot cyan"></i>Влажность, %</span>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas data-el="chart" role="img" aria-label="График температуры и влажности за 24 часа"></canvas>
+          </div>
+          <p class="empty" data-el="chart-empty" hidden>
+            Истории пока нет. Проверьте переменные окружения Tuya в настройках проекта Vercel и обновите страницу.
+          </p>
+        </div>
+      </div>
+    </section>
+  </template>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" crossorigin="anonymous"></script>
   <script src="./app.js"></script>
