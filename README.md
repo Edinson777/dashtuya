@@ -79,6 +79,20 @@ bun run dev
 
 Ключи хранятся только в зашифрованных Secrets и не попадают ни в код, ни в логи сборки. Для проверки вёрстки без устройства скрипт поддерживает тестовые данные: `node scripts/collect-pages-data.mjs --mock`.
 
+### Vercel (serverless, живой опрос без базы)
+
+Папка [`vercel/`](vercel/) — тот же дашборд, но данные не собираются по расписанию, а запрашиваются из Tuya Cloud в момент открытия страницы: serverless-функция `/api/readings` опрашивает статус устройства и журнал за 24 часа и отдаёт готовый JSON. База данных и Actions не нужны вовсе.
+
+Деплой: [vercel.com/new](https://vercel.com/new) → Import `Edinson777/dashtuya` → **Root Directory: `vercel`** → Deploy → задать переменные `TUYA_CLIENT_ID`, `TUYA_CLIENT_SECRET`, `TUYA_DEVICE_ID`, `TUYA_REGION` → Redeploy. Подробности и CLI-вариант — в [`vercel/README.md`](vercel/README.md); проверка деплоя без ключей: `https://<проект>.vercel.app/api/readings?mock=1`.
+
+Сравнение облачных вариантов:
+
+| | GitHub Pages | Vercel |
+| --- | --- | --- |
+| Данные | снапшот каждые ~20 мин по расписанию | живой запрос при открытии |
+| Обновление без посетителей | да | нет |
+| Хранение | коммит `data/latest.json` | не нужно |
+
 ## Структура проекта
 
 ```
@@ -96,6 +110,7 @@ src/
 └── components/ui/                # shadcn/ui компоненты
 
 site/                             # статичная версия для GitHub Pages (HTML/CSS/JS + Chart.js)
+vercel/                           # вариант для Vercel: статика + serverless-функция api/readings.js
 scripts/collect-pages-data.mjs    # сборщик данных для Actions: Tuya → data/latest.json
 scripts/seed-test.mjs             # тестовые данные для локальной проверки без устройства
 .github/workflows/pages.yml       # воркфлоу: сбор по расписанию + деплой на Pages
