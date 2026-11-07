@@ -46,6 +46,22 @@ function hmacSha256HexUpper(data, secret) {
   return createHmac('sha256', secret).update(data, 'utf8').digest('hex').toUpperCase();
 }
 
+/* Понятная расшифровка типовых ошибок авторизации Tuya Cloud */
+function tuyaApiError(json, fallback) {
+  const msg = json?.msg || fallback;
+  const code = json?.code ? ` (код ${json.code})` : '';
+  const m = String(msg || '').toLowerCase();
+  let hint = '';
+  if (m.includes('sign invalid')) {
+    hint = '— Access ID найден, но Access Secret не совпадает: заново скопируйте Access Secret на вкладке Overview проекта (iot.tuya.com), убедитесь, что его не сбрасывали кнопкой Reset, в секрете нет кавычек и лишних символов, а регион TUYA_REGION совпадает с дата-центром проекта';
+  } else if (m.includes('clientid')) {
+    hint = '— проверьте Access ID проекта и регион TUYA_REGION (дата-центр должен совпадать с тем, что выбран в Overview)';
+  } else if (m.includes('time') || m.includes('expire')) {
+    hint = '— расхождение времени с сервером Tuya, повторите позже';
+  }
+  return `Tuya: ${msg || 'неизвестная ошибка API'}${code}${hint ? ` ${hint}` : ''}`;
+}
+
 async function fetchToken(creds) {
   const host = REGION_HOSTS[creds.region];
   const t = Date.now().toString();
@@ -62,7 +78,7 @@ async function fetchToken(creds) {
   });
   const json = await res.json().catch(() => null);
   if (!json || !json.success || !json.result?.access_token) {
-    throw new Error(json?.msg ? `Tuya: ${json.msg}` : 'Не удалось получить токен Tuya Cloud');
+    throw new Error(json?.msg ? tuyaApiError(json, 'Не удалось получить токен Tuya Cloud') : 'Не удалось получить токен Tuya Cloud');
   }
   return json.result.access_token;
 }
@@ -84,7 +100,7 @@ async function apiGet(creds, token, pathWithQuery) {
   });
   const json = await res.json().catch(() => null);
   if (!json) throw new Error('Tuya Cloud недоступен — нет ответа от сервера');
-  if (!json.success) throw new Error(`Tuya: ${json.msg || 'неизвестная ошибка API'}`);
+  if (!json.success) throw new Error(tuyaApiError(json, 'неизвестная ошибка API'));
   return json.result;
 }
 
