@@ -235,38 +235,48 @@ function detectType(status) {
 async function fetchHistory(creds, token, deviceId, maxPages, deadline, hours = 24) {
   const end = Date.now();
   const start = end - hours * 3_600_000;
-  const params = new URLSearchParams({
-    start_time: String(start),
-    end_time: String(end),
-    type: '7',
-    size: '100',
-  });
-  const buckets = new Map();
+  const base = { start_time: String(start), end_time: String(end), size: '100' };
 
-  for (let page = 0; page < maxPages; page += 1) {
-    if (Date.now() > deadline) {
-      console.warn('Достигнут дедлайн времени — история может быть неполной');
-      break;
+  /* Один проход по журналу: до maxPages страниц по 100 записей, в пределах дедлайна. */
+  const runPass = async (withType) => {
+    const params = new URLSearchParams(withType ? { ...base, type: '7' } : base);
+    const buckets = new Map();
+
+    for (let page = 0; page < maxPages; page += 1) {
+      if (Date.now() > deadline) {
+        console.warn('Достигнут дедлайн времени — история может быть неполной');
+        break;
+      }
+      const result = await apiGet(creds, token, `/v1.0/iot-03/devices/${deviceId}/logs?${params}`);
+      for (const log of result?.logs ?? []) {
+        const code = typeof log.code === 'string' ? log.code : null;
+        if (!code) continue;
+        const raw = Number(log.value);
+        if (!Number.isFinite(raw)) continue;
+        let ts = Number(log.time ?? log.event_time ?? 0);
+        if (!ts) continue;
+        if (ts < 1e12) ts *= 1000;
+        const bucket = Math.floor(ts / 60_000) * 60_000;
+        const entry = buckets.get(bucket) ?? { temperature: null, humidity: null, power: null, energy: null };
+        if (TEMP_CODES.has(code)) entry.temperature = convertTemperature(raw);
+        else if (HUM_CODES.has(code)) entry.humidity = convertHumidity(raw);
+        else if (POWER_CODES.has(code)) entry.power = convertPower(raw);
+        else if (ENERGY_TOTAL_CODES.has(code)) entry.energy = convertEnergy(raw);
+        buckets.set(bucket, entry);
+      }
+      if (!result?.has_more || !result?.last_row_key) break;
+      params.set('last_row_key', String(result.last_row_key));
     }
-    const result = await apiGet(creds, token, `/v1.0/iot-03/devices/${deviceId}/logs?${params}`);
-    for (const log of result?.logs ?? []) {
-      const code = typeof log.code === 'string' ? log.code : null;
-      if (!code) continue;
-      const raw = Number(log.value);
-      if (!Number.isFinite(raw)) continue;
-      let ts = Number(log.time ?? log.event_time ?? 0);
-      if (!ts) continue;
-      if (ts < 1e12) ts *= 1000;
-      const bucket = Math.floor(ts / 60_000) * 60_000;
-      const entry = buckets.get(bucket) ?? { temperature: null, humidity: null, power: null, energy: null };
-      if (TEMP_CODES.has(code)) entry.temperature = convertTemperature(raw);
-      else if (HUM_CODES.has(code)) entry.humidity = convertHumidity(raw);
-      else if (POWER_CODES.has(code)) entry.power = convertPower(raw);
-      else if (ENERGY_TOTAL_CODES.has(code)) entry.energy = convertEnergy(raw);
-      buckets.set(bucket, entry);
-    }
-    if (!result?.has_more || !result?.last_row_key) break;
-    params.set('last_row_key', String(result.last_row_key));
+    return buckets;
+  };
+
+  /* Проход 1 — type=7 (отчёты точек данных). Если журнал пуст (часть проектов
+     отдаёт записи только без фильтра типа) — проход 2 без фильтра: события
+     вкл/выкл и прочие не-числовые записи парсер отсеет сам по DP-кодам. */
+  let buckets = await runPass(true);
+  if (buckets.size === 0) {
+    console.warn(`Журнал type=7 пуст для «${deviceId}» — повторяю без фильтра типа`);
+    buckets = await runPass(false);
   }
 
   return Array.from(buckets.entries())
