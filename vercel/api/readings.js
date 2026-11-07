@@ -117,13 +117,33 @@ async function fetchToken(creds) {
   return json.result.access_token;
 }
 
+/* Tuya требует, чтобы query-параметры в строке подписи были отсортированы
+   по ключам (официальный пример подписи сортирует query перед расчётом).
+   Запросы с несколькими параметрами — например, журнал устройства /logs —
+   без сортировки возвращают 1004 «sign invalid», хотя токен и статус работают.
+   Значения остаются URL-кодированными: сервер сверяет подпись с тем же URL,
+   что и в самом запросе. */
+function canonicalTuyaUrl(pathWithQuery) {
+  const q = pathWithQuery.indexOf('?');
+  if (q === -1) return pathWithQuery;
+  const path = pathWithQuery.slice(0, q);
+  const pairs = pathWithQuery.slice(q + 1).split('&').filter(Boolean);
+  pairs.sort((a, b) => {
+    const ka = a.indexOf('=') === -1 ? a : a.slice(0, a.indexOf('='));
+    const kb = b.indexOf('=') === -1 ? b : b.slice(0, b.indexOf('='));
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  return `${path}?${pairs.join('&')}`;
+}
+
 async function apiGet(creds, token, pathWithQuery) {
   const host = REGION_HOSTS[creds.region];
+  const url = canonicalTuyaUrl(pathWithQuery);
   const t = Date.now().toString();
-  // GET \n sha256(пустое тело) \n \n path — именно в таком порядке требует сервер
-  const stringToSign = ['GET', EMPTY_BODY_SHA, '', pathWithQuery].join('\n');
+  // GET \n sha256(пустое тело) \n \n path?отсортированный-query — именно в таком порядке требует сервер
+  const stringToSign = ['GET', EMPTY_BODY_SHA, '', url].join('\n');
   const sign = hmacSha256HexUpper(creds.clientId + token + t + stringToSign, creds.clientSecret);
-  const res = await fetch(`${host}${pathWithQuery}`, {
+  const res = await fetch(`${host}${url}`, {
     headers: {
       client_id: creds.clientId,
       access_token: token,
