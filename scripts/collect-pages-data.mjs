@@ -9,9 +9,14 @@
  * Переменные окружения (реальный режим):
  *   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION (us|eu|euw|cn|in)
  *   TUYA_DEVICE_ID — список ID через запятую («id1,id2»)
- *                    или один ID: тогда скрипт пробует автообнаружить все датчики
- *                    аккаунта (Smart Home Management API) и при неудаче
+ *                    или один ID: тогда скрипт пробует автообнаружить все
+ *                    устройства с климатом или энергомониторингом
+ *                    (Smart Home Management API) и при неудаче
  *                    возвращается к указанному устройству.
+ *
+ * Поддерживаются два типа устройств: датчики климата (температура,
+ * влажность, батарея) и розетки с энергомониторингом (мощность,
+ * напряжение, ток, накопленная энергия). Тип определяется по DP-кодам.
  *
  * Результат: data/latest.json с массивом sensors[] — его читает дашборд (site/).
  * Сценарий не имеет зависимостей и работает на Node.js 20+ (глобальный fetch).
@@ -20,7 +25,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MOCK = process.argv.includes('--mock');
 
@@ -39,6 +44,22 @@ const HUM_CODES = new Set(['va_humidity', 'humidity_current', 'humidity', 'curre
 const BATT_CODES = new Set(['battery_percentage', 'battery', 'battery_value', 'va_battery', 'battery_state']);
 
 const CLIMATE_CODES = new Set([...TEMP_CODES, ...HUM_CODES]); // признак датчика климата
+
+/* Коды розеток с энергомониторингом. Признак розетки — хотя бы один код
+   мощности/напряжения/тока/энергии (у лампочек и простых реле их нет). */
+const POWER_CODES = new Set(['cur_power', 'power', 'power_b', 'power_w']);
+const VOLTAGE_CODES = new Set(['cur_voltage', 'voltage', 'voltage_b']);
+const CURRENT_CODES = new Set(['cur_current', 'current']);
+const ENERGY_TOTAL_CODES = new Set(['add_ele', 'add_ele1', 'add_ele2', 'total_energy']);
+const ENERGY_DAY_CODES = new Set(['day_ele', 'day_energy']);
+const SWITCH_CODES = new Set(['switch_1', 'switch', 'switch_usb1', 'switch_usb']);
+const PLUG_CODES = new Set([
+  ...POWER_CODES,
+  ...VOLTAGE_CODES,
+  ...CURRENT_CODES,
+  ...ENERGY_TOTAL_CODES,
+  ...ENERGY_DAY_CODES,
+]);
 
 /* ------------------------------ подпись запросов ------------------------------ */
 
@@ -127,18 +148,81 @@ function convertHumidity(raw) {
   return raw;
 }
 
+/* Розетки: стандартные множители Tuya (спецификация DP-кодов):
+   cur_power 0,1 Вт; cur_voltage 0,1 В; cur_current мА; add_ele 0,01 кВт·ч.
+   Если значение выходит за физически правдоподобные пределы — подстраиваем
+   множитель (некоторые производители используют другие разряды). */
+
+// 16 А × 230 В ≈ 3,7 кВт — потолок бытовой розетки
+function convertPower(raw) {
+  let p = raw / 10;
+  while (p > 4200) p /= 10;
+  return Math.round(p * 10) / 10;
+}
+
+function plausibleVoltage(v) {
+  return v >= 50 && v <= 260;
+}
+
+function convertVoltage(raw) {
+  for (const scale of [10, 1, 100]) {
+    const v = raw / scale;
+    if (plausibleVoltage(v)) return Math.round(v * 10) / 10;
+  }
+  return Math.round((raw / 10) * 10) / 10;
+}
+
+function convertCurrent(raw) {
+  let i = raw / 1000; // стандарт — миллиамперы
+  while (i > 25) i /= 10; // больше 25 А в бытовую розетку не влезает
+  return Math.round(i * 100) / 100;
+}
+
+function convertEnergy(raw) {
+  return Math.round((raw / 100) * 100) / 100; // 0,01 кВт·ч
+}
+
+function parseSwitchValue(value) {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
 function extractReading(status) {
   let temperature = null;
   let humidity = null;
   let battery = null;
+  let on = null;
+  let power = null;
+  let voltage = null;
+  let current = null;
+  let energyTotal = null;
+  let energyToday = null;
   for (const item of status ?? []) {
+    // состояние реле: значение бывает булевым или строкой «true/false»
+    if (on === null && SWITCH_CODES.has(item.code)) {
+      on = parseSwitchValue(item.value);
+      continue;
+    }
     const v = typeof item.value === 'string' ? Number(item.value) : item.value;
     if (typeof v !== 'number' || !Number.isFinite(v)) continue;
     if (temperature === null && TEMP_CODES.has(item.code)) temperature = convertTemperature(v);
     else if (humidity === null && HUM_CODES.has(item.code)) humidity = convertHumidity(v);
     else if (battery === null && BATT_CODES.has(item.code)) battery = Math.max(0, Math.min(100, Math.round(v)));
+    else if (power === null && POWER_CODES.has(item.code)) power = convertPower(v);
+    else if (voltage === null && VOLTAGE_CODES.has(item.code)) voltage = convertVoltage(v);
+    else if (current === null && CURRENT_CODES.has(item.code)) current = convertCurrent(v);
+    else if (energyTotal === null && ENERGY_TOTAL_CODES.has(item.code)) energyTotal = convertEnergy(v);
+    else if (energyToday === null && ENERGY_DAY_CODES.has(item.code)) energyToday = convertEnergy(v);
   }
-  return { temperature, humidity, battery };
+  return { temperature, humidity, battery, on, power, voltage, current, energyTotal, energyToday };
+}
+
+/* Тип устройства по DP-кодам статуса: «plug», «climate» или «unknown» */
+function detectType(status) {
+  const codes = new Set((status ?? []).map((item) => item.code));
+  const has = (set) => [...set].some((c) => codes.has(c));
+  if (has(PLUG_CODES)) return 'plug';
+  if (has(CLIMATE_CODES)) return 'climate';
+  return 'unknown';
 }
 
 /* ------------------------------ история из журнала ------------------------------ */
@@ -165,9 +249,11 @@ async function fetchHistory(creds, token, deviceId, hours = 24) {
       if (!ts) continue;
       if (ts < 1e12) ts *= 1000;
       const bucket = Math.floor(ts / 60_000) * 60_000;
-      const entry = buckets.get(bucket) ?? { temperature: null, humidity: null };
+      const entry = buckets.get(bucket) ?? { temperature: null, humidity: null, power: null, energy: null };
       if (TEMP_CODES.has(code)) entry.temperature = convertTemperature(raw);
       else if (HUM_CODES.has(code)) entry.humidity = convertHumidity(raw);
+      else if (POWER_CODES.has(code)) entry.power = convertPower(raw);
+      else if (ENERGY_TOTAL_CODES.has(code)) entry.energy = convertEnergy(raw);
       buckets.set(bucket, entry);
     }
     if (!result?.has_more || !result?.last_row_key) break;
@@ -175,7 +261,13 @@ async function fetchHistory(creds, token, deviceId, hours = 24) {
   }
 
   return Array.from(buckets.entries())
-    .map(([ms, v]) => ({ t: new Date(ms).toISOString(), temp: v.temperature, hum: v.humidity }))
+    .map(([ms, v]) => ({
+      t: new Date(ms).toISOString(),
+      temp: v.temperature,
+      hum: v.humidity,
+      power: v.power,
+      energy: v.energy,
+    }))
     .sort((a, b) => new Date(a.t) - new Date(b.t));
 }
 
@@ -193,15 +285,23 @@ function downsample(items, max) {
 function buildStats(history) {
   const temps = history.map((h) => h.temp).filter((v) => v !== null);
   const hums = history.map((h) => h.hum).filter((v) => v !== null);
-  const agg = (arr) =>
+  const powers = history.map((h) => h.power).filter((v) => v !== null);
+  const agg = (arr, digits = 1) =>
     arr.length
       ? {
-          min: Math.round(Math.min(...arr) * 10) / 10,
-          avg: Math.round((arr.reduce((s, v) => s + v, 0) / arr.length) * 10) / 10,
-          max: Math.round(Math.max(...arr) * 10) / 10,
+          min: Math.round(Math.min(...arr) * 10 ** digits) / 10 ** digits,
+          avg: Math.round((arr.reduce((s, v) => s + v, 0) / arr.length) * 10 ** digits) / 10 ** digits,
+          max: Math.round(Math.max(...arr) * 10 ** digits) / 10 ** digits,
         }
       : null;
-  return { temp: agg(temps), hum: agg(hums) };
+  /* прирост счётчика за окно истории (≈24 ч): последний минус первый */
+  const energies = history.map((h) => h.energy).filter((v) => v !== null);
+  let energyDelta = null;
+  if (energies.length >= 2) {
+    const d = energies[energies.length - 1] - energies[0];
+    if (d >= 0) energyDelta = Math.round(d * 100) / 100;
+  }
+  return { temp: agg(temps), hum: agg(hums), power: agg(powers), energyDelta };
 }
 
 /* ------------------------------ mock-режим ------------------------------ */
@@ -241,7 +341,52 @@ function buildMockData() {
       mockSensor('Гостиная', 'mock-livingroom', 22.4, 46, 0),
       mockSensor('Спальня', 'mock-bedroom', 19.8, 55, 1.1),
       mockSensor('Балкон', 'mock-balcony', 12.6, 71, 2.3),
+      mockPlug('Розетка · обогреватель', 'mock-plug', 1150, 0.7),
     ],
+  };
+}
+
+function mockPlug(name, id, basePower, phaseShift) {
+  const now = Date.now();
+  const stepMs = 15 * 60 * 1000;
+  const kWhPerWms = 1 / 3_600_000_000; // Вт × мс → кВт·ч
+  const history = [];
+  let energy = 1243.82; // накопленный счётчик, кВт·ч
+  for (let i = 96; i >= 0; i -= 1) {
+    const t = now - i * stepMs;
+    // обогреватель: периодические циклы вкл/выкл
+    const isOn = Math.sin((i / 96) * Math.PI * 6 + phaseShift) > -0.2;
+    const power = isOn ? Math.round((basePower + (Math.random() - 0.5) * 60) * 10) / 10 : 0;
+    if (i < 96) energy += history[history.length - 1].power * stepMs * kWhPerWms;
+    history.push({
+      t: new Date(t).toISOString(),
+      temp: null,
+      hum: null,
+      power,
+      energy: Math.round(energy * 100) / 100,
+    });
+  }
+  const last = history[history.length - 1];
+  return {
+    id,
+    status: 'ok',
+    error: null,
+    type: 'plug',
+    device: { name, model: 'TS011F', online: true },
+    current: {
+      temperature: null,
+      humidity: null,
+      battery: null,
+      on: last.power > 0,
+      power: last.power,
+      voltage: 227.8,
+      current: Math.round((last.power / 227.8) * 100) / 100,
+      energyTotal: last.energy,
+      energyToday: null,
+      recordedAt: last.t,
+    },
+    stats: buildStats(history),
+    history: downsample(history, 400),
   };
 }
 
@@ -274,12 +419,14 @@ async function discoverSensors(creds, token, anchorId) {
       console.warn('Автообнаружение недоступно: неожиданный ответ API — беру явный список');
       return null;
     }
-    const sensors = devices.filter((d) =>
-      Array.isArray(d?.status) && d.status.some((item) => CLIMATE_CODES.has(item.code)),
+    const sensors = devices.filter(
+      (d) =>
+        Array.isArray(d?.status) &&
+        d.status.some((item) => CLIMATE_CODES.has(item.code) || PLUG_CODES.has(item.code)),
     );
     // якорь должен попасть в список, даже если фильтр его пропустил
     if (!sensors.some((d) => d?.id === anchorId) && anchor?.id) sensors.push(anchor);
-    console.log(`Автообнаружение: найдено датчиков климата — ${sensors.length}`);
+    console.log(`Автообнаружение: устройств с климатом/энергией — ${sensors.length}`);
     return sensors;
   } catch (err) {
     console.warn(`Автообнаружение не удалось (${err.message}) — беру явный список`);
@@ -296,6 +443,7 @@ function sectionFromDetail(creds, token, detail, now) {
     id: detail?.id ?? null,
     status: 'ok',
     error: null,
+    type: detectType(status),
     device: {
       name: detail?.name ?? null,
       model: detail?.model ?? null,
@@ -429,4 +577,18 @@ async function main() {
   }
 }
 
-main();
+/* Внутренние функции открыты для тестов (test-plug-conversions.mjs) */
+export {
+  extractReading,
+  detectType,
+  convertPower,
+  convertVoltage,
+  convertCurrent,
+  convertEnergy,
+  buildStats,
+};
+
+/* Сбор запускается только при прямом вызове сценария; при импорте из тестов main() не выполняется */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

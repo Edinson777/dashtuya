@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Монитор климата — датчики Tuya</title>
-  <meta name="description" content="Показания датчиков температуры и влажности Tuya: текущие значения, график за 24 часа, батарея и статус устройств." />
+  <meta name="description" content="Показания устройств Tuya: температура, влажность, мощность, напряжение, ток и энергопотребление розеток с энергомониторингом, график за 24 часа, батарея и статус." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
@@ -22,7 +22,7 @@
         </div>
         <div>
           <h1>Монитор климата</h1>
-          <p>Датчики Tuya · температура и влажность</p>
+          <p>Датчики Tuya · климат и энергомониторинг</p>
         </div>
       </div>
       <div class="header-actions">
@@ -125,6 +125,72 @@
           </div>
           <p class="empty" data-el="chart-empty" hidden>
             Истории пока нет. Проверьте переменные окружения Tuya в настройках проекта Vercel и обновите страницу.
+          </p>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- Шаблон секции розетки с энергомониторингом -->
+  <template id="plug-template">
+    <section class="sensor-section">
+      <div class="sensor-head">
+        <h2 class="sensor-title">
+          <span class="icon amber" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a6 6 0 0 1-6 6 6 6 0 0 1-6-6V8Z"/></svg></span>
+          <span data-el="name">Розетка</span>
+        </h2>
+        <span class="badge" data-el="online" hidden></span>
+      </div>
+
+      <div class="error-inline" data-el="error" hidden>
+        <strong>Розетка недоступна</strong>
+        <p data-el="error-text"></p>
+      </div>
+
+      <div class="sensor-body" data-el="body">
+        <div class="cards">
+          <article class="card">
+            <div class="card-head">
+              <h3 class="card-title"><span class="icon amber" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>Мощность</h3>
+              <span class="badge" data-el="on-badge" hidden></span>
+            </div>
+            <div class="value-row"><span class="big-value" data-el="power-value">—</span><span class="unit amber">Вт</span></div>
+            <p class="hint" data-el="power-stats">История за сутки появится после синхронизации</p>
+          </article>
+
+          <article class="card">
+            <div class="card-head">
+              <h3 class="card-title"><span class="icon cyan" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>Напряжение и ток</h3>
+            </div>
+            <div class="value-row"><span class="big-value" data-el="voltage-value">—</span><span class="unit cyan">В</span></div>
+            <p class="hint" data-el="current-stats">Ток: —</p>
+          </article>
+
+          <article class="card">
+            <div class="card-head">
+              <h3 class="card-title"><span class="icon green" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>Энергия</h3>
+            </div>
+            <div class="value-row"><span class="big-value" data-el="energy-value">—</span><span class="unit green">кВт·ч</span></div>
+            <p class="hint" data-el="energy-stats">Накопленная энергия по счётчику розетки</p>
+            <p class="device-model" data-el="device-model"></p>
+          </article>
+        </div>
+
+        <div class="card chart-card">
+          <div class="chart-head">
+            <div>
+              <h3 class="chart-title">История за 24 часа</h3>
+              <p class="chart-sub">Данные запрашиваются из Tuya Cloud в момент открытия страницы</p>
+            </div>
+            <div class="legend">
+              <span><i class="dot amber"></i><span data-el="chart-legend">Мощность, Вт</span></span>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas data-el="chart" role="img" aria-label="График мощности за 24 часа"></canvas>
+          </div>
+          <p class="empty" data-el="chart-empty" hidden>
+            Истории пока нет. Розетка должна быть онлайн и передавать показания в журнал Tuya.
           </p>
         </div>
       </div>

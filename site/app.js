@@ -224,6 +224,151 @@
     if (hasData) renderChart(canvas, history);
   }
 
+  /* ---------- секция розетки с энергомониторингом ---------- */
+
+  function renderPlugChart(canvas, history, mode) {
+    var key = mode === 'energy' ? 'energy' : 'power';
+    var unit = key === 'energy' ? ' кВт·ч' : ' Вт';
+    var digits = key === 'energy' ? 2 : 1;
+    var color = key === 'energy' ? '#34d399' : '#fbbf24';
+    var bg = key === 'energy' ? 'rgba(52, 211, 153, 0.10)' : 'rgba(251, 191, 36, 0.12)';
+    var labels = history.map(function (h) {
+      return new Date(h.t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    });
+
+    if (typeof Chart === 'undefined') return; // CDN недоступен — показываем только карточки
+
+    charts.push(new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: key === 'energy' ? 'Энергия' : 'Мощность',
+            data: history.map(function (h) { return h[key]; }),
+            borderColor: color,
+            backgroundColor: bg,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            borderWidth: 2,
+            spanGaps: true
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            borderColor: 'rgba(255,255,255,0.1)',
+            borderWidth: 1,
+            titleColor: '#cbd5e1',
+            bodyColor: '#e2e8f0',
+            padding: 10,
+            callbacks: {
+              label: function (item) {
+                return ' ' + item.dataset.label + ': ' + fmt(item.parsed.y, digits) + unit;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            ticks: { color: COLORS.tick, font: { size: 11 }, maxTicksLimit: 10, maxRotation: 0 },
+            border: { display: false }
+          },
+          y: {
+            beginAtZero: true,
+            grid: { color: COLORS.grid },
+            ticks: { color: COLORS.tick, font: { size: 11 } },
+            border: { display: false }
+          }
+        }
+      }
+    }));
+  }
+
+  function renderPlugSection(section, sensor) {
+    var device = sensor.device || {};
+
+    el(section, 'name').textContent = device.name || 'Розетка Tuya';
+    var online = el(section, 'online');
+    if (device.online === true) {
+      online.hidden = false; online.className = 'badge ok'; online.textContent = 'Онлайн';
+    } else if (device.online === false) {
+      online.hidden = false; online.className = 'badge off'; online.textContent = 'Офлайн';
+    } else {
+      online.hidden = true;
+    }
+
+    if (sensor.status === 'error') {
+      el(section, 'error').hidden = false;
+      el(section, 'error-text').textContent = sensor.error || 'Неизвестная ошибка — проверьте секреты Tuya в настройках Actions';
+      el(section, 'body').hidden = true;
+      return;
+    }
+    el(section, 'body').hidden = false;
+
+    var current = sensor.current || {};
+    var s = sensor.stats;
+
+    /* состояние реле */
+    var onBadge = el(section, 'on-badge');
+    if (current.on === true) {
+      onBadge.hidden = false; onBadge.className = 'badge ok'; onBadge.textContent = 'ВКЛ';
+    } else if (current.on === false) {
+      onBadge.hidden = false; onBadge.className = 'badge off'; onBadge.textContent = 'ВЫКЛ';
+    } else {
+      onBadge.hidden = true;
+    }
+
+    /* мощность */
+    el(section, 'power-value').textContent = current.power !== null && current.power !== undefined
+      ? fmt(current.power, 1) : '—';
+    el(section, 'power-stats').textContent = s && s.power
+      ? 'за 24 ч: мин ' + fmt(s.power.min, 0) + ' · ср. ' + fmt(s.power.avg, 0) + ' · макс ' + fmt(s.power.max, 0) + ' Вт'
+      : 'История за сутки появится после синхронизации';
+
+    /* напряжение и ток */
+    el(section, 'voltage-value').textContent = current.voltage !== null && current.voltage !== undefined
+      ? fmt(current.voltage, 1) : '—';
+    el(section, 'current-stats').textContent = 'Ток: ' + (current.current !== null && current.current !== undefined ? fmt(current.current, 2) + ' А' : '—');
+
+    /* энергия */
+    el(section, 'energy-value').textContent = current.energyTotal !== null && current.energyTotal !== undefined
+      ? fmt(current.energyTotal, 2) : '—';
+    var energyParts = [];
+    if (s && s.energyDelta !== null && s.energyDelta !== undefined) {
+      energyParts.push('за 24 ч: +' + fmt(s.energyDelta, 2) + ' кВт·ч');
+    }
+    if (current.energyToday !== null && current.energyToday !== undefined) {
+      energyParts.push('сегодня: ' + fmt(current.energyToday, 2) + ' кВт·ч');
+    }
+    el(section, 'energy-stats').textContent = energyParts.length
+      ? energyParts.join(' · ')
+      : 'Накопленная энергия по счётчику розетки';
+
+    el(section, 'device-model').textContent = device.model ? 'Модель: ' + device.model : '';
+
+    /* график: мощность; если журнал содержит только счётчик — накопленная энергия */
+    var history = sensor.history || [];
+    var powerPoints = history.filter(function (h) { return h.power !== null && h.power !== undefined; }).length;
+    var energyPoints = history.filter(function (h) { return h.energy !== null && h.energy !== undefined; }).length;
+    var mode = powerPoints >= 2 ? 'power' : energyPoints >= 2 ? 'energy' : null;
+    var hasData = mode !== null;
+    el(section, 'chart-empty').hidden = hasData;
+    el(section, 'chart-legend').textContent = mode === 'energy' ? 'Энергия, кВт·ч' : 'Мощность, Вт';
+    var canvas = el(section, 'chart');
+    canvas.style.visibility = hasData ? 'visible' : 'hidden';
+    if (hasData) renderPlugChart(canvas, history, mode);
+  }
+
   function render(data) {
     destroyCharts();
 
@@ -256,11 +401,14 @@
     }
 
     var template = $('sensor-template');
+    var plugTemplate = $('plug-template');
     sensors.forEach(function (sensor, i) {
-      var section = template.content.firstElementChild.cloneNode(true);
+      var tpl = sensor.type === 'plug' && plugTemplate ? plugTemplate : template;
+      var section = tpl.content.firstElementChild.cloneNode(true);
       section.id = 'sensor-' + i;
       root.appendChild(section);
-      renderSection(section, sensor);
+      if (tpl === plugTemplate) renderPlugSection(section, sensor);
+      else renderSection(section, sensor);
     });
 
     window.__lastGeneratedAt = data.generatedAt || null;
