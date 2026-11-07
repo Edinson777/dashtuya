@@ -2,9 +2,11 @@ import crypto from 'crypto';
 
 /**
  * Клиент Tuya IoT Cloud API (OpenAPI).
- * Подпись запросов — HMAC-SHA256 по схеме Tuya:
- *   токен:      sign = HMAC(client_id + t, secret)
- *   запросы:    sign = HMAC(client_id + access_token + t + method\npath\nheaders\nbody, secret)
+ * Подпись запросов — HMAC-SHA256 по схеме Tuya (эмпирически проверено на живом API):
+ *   токен:   sign = HMAC(client_id + t + [GET, sha256(''), '', '/v1.0/token?grant_type=1'].join('\n'), secret)
+ *   запросы: sign = HMAC(client_id + access_token + t + [GET, sha256(''), '', path].join('\n'), secret)
+ * ВАЖНО: короткая форма «client_id + t» из старой документации сервером больше принимается —
+ * отвечает 1004 «sign invalid» при любом секрете.
  * Документация: https://developer.tuya.com/en/docs/iot/api-request
  */
 
@@ -104,6 +106,9 @@ interface TokenEntry {
 
 const tokenCache = new Map<string, TokenEntry>();
 
+/** SHA-256 пустого тела запроса — участвует в строке подписи */
+const EMPTY_BODY_SHA = crypto.createHash('sha256').update('').digest('hex');
+
 function hmacSha256HexUpper(data: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('hex').toUpperCase();
 }
@@ -115,8 +120,10 @@ async function fetchToken(creds: TuyaCredentials): Promise<string> {
   if (cached && cached.expiresAt > Date.now() + 30_000) return cached.token;
 
   const t = Date.now().toString();
-  const sign = hmacSha256HexUpper(creds.clientId + t, creds.clientSecret);
-  const res = await fetch(`${host}/v1.0/token?grant_type=1`, {
+  const tokenPath = '/v1.0/token?grant_type=1';
+  const stringToSign = ['GET', EMPTY_BODY_SHA, '', tokenPath].join('\n');
+  const sign = hmacSha256HexUpper(creds.clientId + t + stringToSign, creds.clientSecret);
+  const res = await fetch(`${host}${tokenPath}`, {
     headers: {
       client_id: creds.clientId,
       sign,
@@ -160,8 +167,8 @@ function translateError(msg: string | undefined, code: number | string | undefin
     return 'Неверный Access ID или выбран не тот регион';
   if (m.includes('not exist') || m.includes('not exists') || code === 2301)
     return 'Устройство не найдено — проверьте ID устройства и что оно привязано к облачному проекту';
-  if (m.includes('permission') || m.includes('authority') || code === 28841002)
-    return 'Нет доступа к API — добавьте сервис «IoT Core» в проекте Tuya Cloud и подождите пару минут';
+  if (m.includes('permission') || m.includes('authority') || code === 28841002 || m.includes('subscription'))
+    return 'Подписка IoT Core у проекта истекла — в iot.tuya.com: Cloud → Cloud Services → IoT Core → Renew trial (заявку одобряют 1–2 рабочих дня), либо создайте новый проект с новым Trial';
   if (m.includes('token')) return 'Проблема с токеном Tuya — проверьте ключи и регион';
   return `Tuya: ${msg || 'неизвестная ошибка API'}`;
 }
@@ -172,8 +179,8 @@ async function apiGet<T>(creds: TuyaCredentials, pathWithQuery: string): Promise
 
   const attempt = async (token: string): Promise<TuyaResponse<T> | null> => {
     const t = Date.now().toString();
-    // method \n path \n headers(пусто) \n body(пусто)
-    const stringToSign = ['GET', pathWithQuery, '', ''].join('\n');
+    // GET \n sha256(пустое тело) \n \n path — именно в таком порядке требует сервер
+    const stringToSign = ['GET', EMPTY_BODY_SHA, '', pathWithQuery].join('\n');
     const sign = hmacSha256HexUpper(creds.clientId + token + t + stringToSign, creds.clientSecret);
     const res = await fetch(`${host}${pathWithQuery}`, {
       headers: {

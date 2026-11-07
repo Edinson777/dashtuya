@@ -17,7 +17,7 @@
  * Сценарий не имеет зависимостей и работает на Node.js 20+ (глобальный fetch).
  */
 
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +42,10 @@ const CLIMATE_CODES = new Set([...TEMP_CODES, ...HUM_CODES]); // признак 
 
 /* ------------------------------ подпись запросов ------------------------------ */
 
+// SHA-256 пустого тела запроса — участвует в строке подписи (эмпирически проверено:
+// сервер принимает ТОЛЬКО полную строку подписи, короткая «client_id + t» даёт 1004)
+const EMPTY_BODY_SHA = createHash('sha256').update('').digest('hex');
+
 function hmacSha256HexUpper(data, secret) {
   return createHmac('sha256', secret).update(data, 'utf8').digest('hex').toUpperCase();
 }
@@ -56,6 +60,8 @@ function tuyaApiError(json, fallback) {
     hint = '— Access ID найден, но Access Secret не совпадает: заново скопируйте Access Secret на вкладке Overview проекта (iot.tuya.com), убедитесь, что его не сбрасывали кнопкой Reset, в секрете нет кавычек и лишних символов, а регион TUYA_REGION совпадает с дата-центром проекта';
   } else if (m.includes('clientid')) {
     hint = '— проверьте Access ID проекта и регион TUYA_REGION (дата-центр должен совпадать с тем, что выбран в Overview)';
+  } else if (json?.code === 28841002 || m.includes('subscription') || m.includes('permission')) {
+    hint = '— подписка IoT Core у проекта истекла: в iot.tuya.com откройте Cloud → Cloud Services → IoT Core → Renew trial (заявку одобряют 1–2 рабочих дня), либо создайте новый проект с новым Trial';
   } else if (m.includes('time') || m.includes('expire')) {
     hint = '— расхождение времени с сервером Tuya, повторите позже';
   }
@@ -64,9 +70,11 @@ function tuyaApiError(json, fallback) {
 
 async function fetchToken(creds) {
   const host = REGION_HOSTS[creds.region];
+  const tokenPath = '/v1.0/token?grant_type=1';
   const t = Date.now().toString();
-  const sign = hmacSha256HexUpper(creds.clientId + t, creds.clientSecret);
-  const res = await fetch(`${host}/v1.0/token?grant_type=1`, {
+  const stringToSign = ['GET', EMPTY_BODY_SHA, '', tokenPath].join('\n');
+  const sign = hmacSha256HexUpper(creds.clientId + t + stringToSign, creds.clientSecret);
+  const res = await fetch(`${host}${tokenPath}`, {
     headers: {
       client_id: creds.clientId,
       sign,
@@ -86,7 +94,8 @@ async function fetchToken(creds) {
 async function apiGet(creds, token, pathWithQuery) {
   const host = REGION_HOSTS[creds.region];
   const t = Date.now().toString();
-  const stringToSign = ['GET', pathWithQuery, '', ''].join('\n');
+  // GET \n sha256(пустое тело) \n \n path — именно в таком порядке требует сервер
+  const stringToSign = ['GET', EMPTY_BODY_SHA, '', pathWithQuery].join('\n');
   const sign = hmacSha256HexUpper(creds.clientId + token + t + stringToSign, creds.clientSecret);
   const res = await fetch(`${host}${pathWithQuery}`, {
     headers: {
